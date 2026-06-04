@@ -5183,6 +5183,14 @@ open class Terminal {
         let bMarginRight = buffer.marginRight
         let hasScrollback = buffer.hasScrollback
 
+        // Skipper patch: decide whether streaming output keeps the viewport pinned
+        // to the bottom based on whether it was ALREADY at the bottom, rather than
+        // the `userScrolling` flag below — which is never set on macOS (the view's
+        // own copy is write-only), so output used to always snap to the bottom and
+        // yank the user out of the scrollback they were reading. Captured here,
+        // before yBase/yDisp are mutated.
+        let wasAtBottom = buffer.yDisp == buffer.yBase
+
         var newLine = blankLine
         if newLine.count != cols || newLine [0].attribute != eraseAttr () {
             newLine = buffer.getBlankLine (attribute: eraseAttr (), isWrapped: isWrapped)
@@ -5252,7 +5260,7 @@ open class Terminal {
             if !willBufferBeTrimmed {
                 buffer.yBase += 1
                 // Only scroll the ydisp with ybase if the user has not scrolled up
-                if !userScrolling {
+                if wasAtBottom {
                     buffer.yDisp += 1
                 }
             } else {
@@ -5262,7 +5270,7 @@ open class Terminal {
 
                 // When the buffer is full and the user has scrolled up, keep the text
                 // stable unless ydisp is right at the top
-                if userScrolling {
+                if !wasAtBottom {
                     buffer.yDisp = max (buffer.yDisp - 1, 0)
                 }
             }
@@ -5286,9 +5294,9 @@ open class Terminal {
             lines [bottomRow] = BufferLine (from: newLine)
         }
 
-        // Move the viewport to the bottom of the buffer unless the user is
-        // scrolling.
-        if !userScrolling {
+        // Move the viewport to the bottom of the buffer unless the user has
+        // scrolled up to read older output.
+        if wasAtBottom {
             buffer.yDisp = buffer.yBase
         }
 
