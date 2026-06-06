@@ -421,7 +421,13 @@ public final class Buffer {
             // Deal with columns increasing (reducing needs to happen after reflow)
             
             if cols < newCols {
-                for i in 0..<lines.maxLength {
+                // Only the materialized lines (0..<count) need widening; the empty
+                // preallocated ring slots (count..<maxLength) are created on demand
+                // at the new width via makeEmpty. Iterating maxLength here forced
+                // every empty slot to materialize into a real BufferLine — turning a
+                // ~4 MB ring into ~1.2 GB on a single resize of a terminal with a deep
+                // scrollback cap. See Skipper perf audit (2026-06).
+                for i in 0..<lines.count {
                     lines [i].resize (cols: newCols, fillData: CharData.Null)
                 }
 
@@ -501,17 +507,23 @@ public final class Buffer {
         
         if isReflowEnabled {
             reflow (newCols, newRows)
-            // Trim the end of the line off if cols shrunk
+            // Trim the end of the line off if cols shrunk. Only materialized lines
+            // need it; empty ring slots are made on demand at the new width. (Same
+            // fix as the cols-increasing branch above — iterating maxLength here
+            // materialized the whole 500k ring on every shrink.)
             if cols > newCols {
-                for i in 0..<lines.maxLength {
+                for i in 0..<lines.count {
                     lines [i].resize (cols: newCols, fillData: CharData.Null)
                 }
             }
         }
-        
-        // DEBUG: Post-condition
+
+        // DEBUG: Post-condition. Gated behind DEBUG and scanning only materialized
+        // lines — it previously ran in release builds and walked all maxLength slots,
+        // materializing the entire ring (and could abort()) on every resize.
+        #if DEBUG
         if lines.count > 0 {
-            for i in 0..<lines.maxLength {
+            for i in 0..<lines.count {
                 let line = lines [i]
                 if line.count < newCols {
                     print ("stop here newCols=\(newCols) but the element has: \(line.count)")
@@ -519,6 +531,7 @@ public final class Buffer {
                 }
             }
         }
+        #endif
         rows = newRows
         cols = newCols
     }
