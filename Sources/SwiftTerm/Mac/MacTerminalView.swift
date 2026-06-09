@@ -2173,13 +2173,33 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         if event.deltaY == 0 {
             return
         }
-        let velocity = calcScrollingVelocity(delta: Int (abs (event.deltaY)))
+        let velocity: Int
+        // A trackpad / Magic Mouse always carries a scroll `phase` (and a
+        // `momentumPhase` during inertia); a mouse wheel — including a
+        // high-resolution "precise" wheel — carries neither. Discriminate on
+        // phase, NOT `hasPreciseScrollingDeltas`: that flag is also true for
+        // high-res wheels, the very devices whose fast spin jumps.
+        if event.phase.isEmpty && event.momentumPhase.isEmpty {
+            // Mouse wheel: macOS scroll acceleration pushes deltaY to ~10 on a
+            // fast spin, and the stepped velocity mapped delta>9 to a whole-screen
+            // jump (max(rows,20)) — so quick wheeling teleported the viewport. Map
+            // to a small, bounded line count for smooth, predictable scrolling.
+            velocity = min (maxWheelLinesPerScroll, max (1, Int (abs (event.deltaY).rounded())))
+        } else {
+            // Trackpad / Magic Mouse: a stream of fine-grained events, each with a
+            // small deltaY. The stepped velocity is already smooth here.
+            velocity = calcScrollingVelocity(delta: Int (abs (event.deltaY)))
+        }
         if event.deltaY > 0 {
             scrollUp (lines: velocity)
         } else {
             scrollDown(lines: velocity)
         }
     }
+
+    /// Upper bound on lines scrolled per mouse-wheel event, so OS scroll
+    /// acceleration on a fast spin can't teleport the viewport a whole screen.
+    private let maxWheelLinesPerScroll = 5
     
     private func calcScrollingVelocity (delta: Int) -> Int
     {
