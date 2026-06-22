@@ -583,8 +583,10 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     }
     
     open func linefeed(source: Terminal) {
-        // Preserve manual selection while output is streaming when mouse reporting is disabled.
-        if allowMouseReporting {
+        // Preserve a manual text selection across newlines in the normal (scrollback)
+        // buffer so streaming output doesn't wipe it; clear only on the alternate
+        // full-screen buffer. Same fix as `feedPrepare` — see its comment.
+        if source.isCurrentBufferAlternate {
             selection.selectNone()
         }
     }

@@ -1899,8 +1899,14 @@ extension TerminalView {
     func feedPrepare()
     {
         search.invalidate()
-        // Preserve manual selection while output is streaming when mouse reporting is disabled.
-        if allowMouseReporting {
+        // Preserve a manual text selection while output streams into the normal
+        // (scrollback) buffer: selection offsets are absolute buffer coordinates, so
+        // appended output keeps them valid — matching Terminal.app/iTerm2, where a
+        // streaming command never wipes your selection. Gating on `allowMouseReporting`
+        // (a capability flag that defaults to true) cleared it on essentially every
+        // feed. Clear only on the alternate full-screen buffer (vim/htop redrawing in
+        // place), where a stale highlight would point at cells whose content changed.
+        if terminal.isCurrentBufferAlternate {
             selection.active = false
         }
         startDisplayUpdates()
