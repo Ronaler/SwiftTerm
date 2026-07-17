@@ -1961,8 +1961,17 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         }
     }
     
+    /// Shift reserves the mouse for the local terminal — selection, wheel
+    /// scrollback — even while the application owns mouse reporting (tmux
+    /// `mouse on`, htop, vim `mouse=a`). Without this escape hatch there is NO
+    /// way to select text in such apps. Same convention as
+    /// xterm/kitty/alacritty/Ghostty; `scrollWheel` honors it too.
+    private func bypassMouseReporting(_ event: NSEvent) -> Bool {
+        event.modifierFlags.contains(.shift)
+    }
+
     public override func mouseDown(with event: NSEvent) {
-        if allowMouseReporting && terminal.mouseMode.sendButtonPress() {
+        if allowMouseReporting && terminal.mouseMode.sendButtonPress() && !bypassMouseReporting(event) {
             sharedMouseEvent(with: event)
             return
         }
@@ -2007,7 +2016,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
             terminalDelegate?.requestOpenLink(source: self, link: result.link, params: result.params)
             return
         }
-        if allowMouseReporting && terminal.mouseMode.sendButtonRelease() {
+        if allowMouseReporting && terminal.mouseMode.sendButtonRelease() && !bypassMouseReporting(event) {
             sharedMouseEvent(with: event)
             return
         }
@@ -2024,7 +2033,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         let displayBuffer = terminal.displayBuffer
         let mouseHit = calculateMouseHit(with: event)
         let hit = mouseHit.grid
-        if allowMouseReporting {
+        if allowMouseReporting && !bypassMouseReporting(event) {
             if terminal.mouseMode.sendMotionEvent() {
                 let flags = encodeMouseEvent(with: event)
                 let screenRow = max (0, min (displayBuffer.rows - 1, hit.row - displayBuffer.yDisp))
@@ -2203,7 +2212,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         //    forward the wheel as button 64/65 press events at the pointer
         //    cell. Shift bypasses reporting (xterm behavior) so the local
         //    scrollback always stays reachable.
-        if allowMouseReporting && terminal.mouseMode.sendButtonPress() && !event.modifierFlags.contains(.shift) {
+        if allowMouseReporting && terminal.mouseMode.sendButtonPress() && !bypassMouseReporting(event) {
             let hit = calculateMouseHit(with: event)
             let displayBuffer = terminal.displayBuffer
             let screenRow = max (0, min (displayBuffer.rows - 1, hit.grid.row - displayBuffer.yDisp))
