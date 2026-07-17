@@ -2192,7 +2192,45 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
             // small deltaY. The stepped velocity is already smooth here.
             velocity = calcScrollingVelocity(delta: Int (abs (event.deltaY)))
         }
-        if event.deltaY > 0 {
+        let up = event.deltaY > 0
+
+        // Wheel events must reach the application when it asked for them —
+        // otherwise scrolling is dead inside remote/full-screen apps (ssh into
+        // tmux/htop/less: the local scrollback is empty, so the fallthrough
+        // below does nothing). Mirrors xterm/iTerm2/Terminal.app.
+        //
+        // 1. Mouse reporting active (tmux `mouse on`, vim `mouse=a`, htop):
+        //    forward the wheel as button 64/65 press events at the pointer
+        //    cell. Shift bypasses reporting (xterm behavior) so the local
+        //    scrollback always stays reachable.
+        if allowMouseReporting && terminal.mouseMode.sendButtonPress() && !event.modifierFlags.contains(.shift) {
+            let hit = calculateMouseHit(with: event)
+            let displayBuffer = terminal.displayBuffer
+            let screenRow = max (0, min (displayBuffer.rows - 1, hit.grid.row - displayBuffer.yDisp))
+            let flags = terminal.encodeButton(button: up ? 4 : 5, release: false, shift: false,
+                                              meta: event.modifierFlags.contains(.option),
+                                              control: event.modifierFlags.contains(.control))
+            for _ in 0..<velocity {
+                terminal.sendEvent(buttonFlags: flags, x: hit.grid.col, y: screenRow,
+                                   pixelX: hit.pixels.col, pixelY: hit.pixels.row)
+            }
+            return
+        }
+
+        // 2. Alternate screen without mouse reporting (plain less/vim): send
+        //    cursor keys — "alternate scroll". The alternate buffer has no
+        //    scrollback, so local scrolling cannot work there by definition.
+        if terminal.isCurrentBufferAlternate {
+            let seq = up ? (terminal.applicationCursor ? EscapeSequences.moveUpApp : EscapeSequences.moveUpNormal)
+                         : (terminal.applicationCursor ? EscapeSequences.moveDownApp : EscapeSequences.moveDownNormal)
+            for _ in 0..<velocity {
+                send (seq)
+            }
+            return
+        }
+
+        // 3. Normal buffer: scroll the local scrollback.
+        if up {
             scrollUp (lines: velocity)
         } else {
             scrollDown(lines: velocity)
