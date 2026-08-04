@@ -113,6 +113,28 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     private var findBarOptions: SearchOptions = SearchOptions()
     var debug: TerminalDebugView?
     var pendingDisplay: Bool = false
+
+    /// Upper bound on how often streaming output repaints this view, in frames
+    /// per second. Display updates are coalesced to at most this rate (both the
+    /// CoreGraphics and Metal paths); the trailing update always renders the
+    /// final state, so no output is ever lost — a lower rate only batches more
+    /// parse batches into one repaint. Hosts embedding many terminals can lower
+    /// this on non-focused views (e.g. 30) to bound total render cost. Clamped
+    /// to at least 1.
+    public var maxFramesPerSecond: Int = 60
+    var displayUpdateDelayNanos: UInt64 {
+        UInt64(1_000_000_000 / max(1, maxFramesPerSecond))
+    }
+
+    /// Minimum seconds between accessibility update notifications posted for
+    /// streaming output. Posts are coalesced (trailing edge included), so an AX
+    /// client always hears about the final state — this only stops the
+    /// per-frame `.valueChanged`/`.selectedTextChanged` flood that N busy
+    /// terminals × 60 FPS otherwise produce. Set to 0 to post on every update.
+    public var accessibilityPostMinInterval: TimeInterval = 0.1
+    var axPostScheduled = false
+    var axLastPostTime: CFAbsoluteTime = 0
+    var axLastPostedSelection: AXSelectionSignature?
 #if canImport(MetalKit)
     var metalView: MTKView?
     var metalRenderer: MetalTerminalRenderer?

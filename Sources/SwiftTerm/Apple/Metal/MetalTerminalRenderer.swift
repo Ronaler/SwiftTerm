@@ -178,6 +178,7 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
 #if canImport(os)
     private static let profileLog = OSLog(subsystem: "org.tirania.SwiftTerm", category: "MetalProfile")
     private static let profileEnabled = ProcessInfo.processInfo.environment["SWIFTTERM_PROFILE"] == "1"
+    static let fpsLogEnabled = ProcessInfo.processInfo.environment["SWIFTTERM_METAL_FPS"] == "1"
 #endif
     private weak var terminalView: TerminalView?
     private weak var view: MTKView?
@@ -370,15 +371,19 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
         }
 #endif
 #if DEBUG
-        debugFrameCount += 1
-        let now = CFAbsoluteTimeGetCurrent()
-        let elapsed = now - debugLastLogTime
-        if elapsed >= 1.0 {
-            let totalRows = debugRowsRebuilt + debugRowsCached
-            let fps = Double(debugFrameCount) / elapsed
-            print(String(format: "Metal FPS: %.1f (rows rebuilt: %d/%d)", fps, debugRowsRebuilt, totalRows))
-            debugFrameCount = 0
-            debugLastLogTime = now
+        // Opt-in via SWIFTTERM_METAL_FPS=1: with many embedded terminals the
+        // per-second print per renderer is itself noise/overhead.
+        if MetalTerminalRenderer.fpsLogEnabled {
+            debugFrameCount += 1
+            let now = CFAbsoluteTimeGetCurrent()
+            let elapsed = now - debugLastLogTime
+            if elapsed >= 1.0 {
+                let totalRows = debugRowsRebuilt + debugRowsCached
+                let fps = Double(debugFrameCount) / elapsed
+                print(String(format: "Metal FPS: %.1f (rows rebuilt: %d/%d)", fps, debugRowsRebuilt, totalRows))
+                debugFrameCount = 0
+                debugLastLogTime = now
+            }
         }
 #endif
         let bgColor = colorToSIMD(terminalView.nativeBackgroundColor)

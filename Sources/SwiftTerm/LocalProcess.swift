@@ -89,6 +89,11 @@ public class LocalProcess {
     private let usesMainQueue: Bool
     private let pendingChunkFlushThreshold = 32
     private let pendingTimeSliceNs: UInt64 = 4_000_000
+    /// Adjacent pending chunks are merged into one delivery up to this many
+    /// bytes: one parser resume + one coalesced display-update per drain pass
+    /// instead of one per read. Bounded so a single delivery can't hog the
+    /// dispatch queue past the time slice for long.
+    private let maxCoalescedBytes = 256 * 1024
     private var pendingChunks: [[UInt8]] = []
     private var pendingChunkIndex: Int = 0
     private var pendingScheduled = false
@@ -138,8 +143,26 @@ public class LocalProcess {
             var chunk: [UInt8]?
             pendingLock.lock()
             if pendingChunkIndex < pendingChunks.count {
-                chunk = pendingChunks[pendingChunkIndex]
-                pendingChunkIndex += 1
+                // Coalesce adjacent queued chunks (in arrival order) into one
+                // delivery, bounded by maxCoalescedBytes. A burst that queued
+                // many reads then costs one parser resume instead of many.
+                var end = pendingChunkIndex + 1
+                var size = pendingChunks[pendingChunkIndex].count
+                while end < pendingChunks.count, size + pendingChunks[end].count <= maxCoalescedBytes {
+                    size += pendingChunks[end].count
+                    end += 1
+                }
+                if end == pendingChunkIndex + 1 {
+                    chunk = pendingChunks[pendingChunkIndex]
+                } else {
+                    var merged = [UInt8]()
+                    merged.reserveCapacity(size)
+                    for i in pendingChunkIndex..<end {
+                        merged.append(contentsOf: pendingChunks[i])
+                    }
+                    chunk = merged
+                }
+                pendingChunkIndex = end
                 if pendingChunkIndex >= pendingChunkFlushThreshold {
                     pendingChunks.removeFirst(pendingChunkIndex)
                     pendingChunkIndex = 0

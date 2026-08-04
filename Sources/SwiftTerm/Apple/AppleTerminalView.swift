@@ -1651,11 +1651,51 @@ extension TerminalView {
         if (notifyAccessibility) {
             accessibility.invalidate ()
             #if os(macOS)
-            NSAccessibility.post (element: self, notification: .valueChanged)
-            NSAccessibility.post (element: self, notification: .selectedTextChanged)
+            queueAccessibilityPost ()
             #endif
         }
     }
+
+#if os(macOS)
+    /// Coalesces accessibility notifications for streaming output: at most one
+    /// `.valueChanged` per ``accessibilityPostMinInterval`` (leading edge when
+    /// quiet, trailing edge during a burst, so the final state is always
+    /// announced), and `.selectedTextChanged` only when the selection actually
+    /// changed since the last post.
+    func queueAccessibilityPost ()
+    {
+        let interval = accessibilityPostMinInterval
+        guard interval > 0 else {
+            postAccessibilityNotifications ()
+            return
+        }
+        if axPostScheduled {
+            return
+        }
+        let elapsed = CFAbsoluteTimeGetCurrent () - axLastPostTime
+        if elapsed >= interval {
+            postAccessibilityNotifications ()
+        } else {
+            axPostScheduled = true
+            DispatchQueue.main.asyncAfter (deadline: .now () + (interval - elapsed)) { [weak self] in
+                guard let self else { return }
+                self.axPostScheduled = false
+                self.postAccessibilityNotifications ()
+            }
+        }
+    }
+
+    func postAccessibilityNotifications ()
+    {
+        axLastPostTime = CFAbsoluteTimeGetCurrent ()
+        NSAccessibility.post (element: self, notification: .valueChanged)
+        let signature = AXSelectionSignature (active: selection.active, start: selection.start, end: selection.end)
+        if signature != axLastPostedSelection {
+            axLastPostedSelection = signature
+            NSAccessibility.post (element: self, notification: .selectedTextChanged)
+        }
+    }
+#endif
     
     func updateCursorPosition()
     {
@@ -1704,12 +1744,9 @@ extension TerminalView {
     {
         // throttle
         if !pendingDisplay {
-            let fps60 = 16670000
-            // let fps30 = 16670000*2
-            let fpsDelay = fps60
             pendingDisplay = true
             DispatchQueue.main.asyncAfter(
-                deadline: DispatchTime (uptimeNanoseconds: DispatchTime.now().uptimeNanoseconds + UInt64 (fpsDelay)),
+                deadline: DispatchTime (uptimeNanoseconds: DispatchTime.now().uptimeNanoseconds + displayUpdateDelayNanos),
                 execute: updateDisplay)
         }
     }
@@ -1727,11 +1764,9 @@ extension TerminalView {
             return
         }
         if !pendingMetalDisplay {
-            let fps60 = 16670000
-            let fpsDelay = fps60
             pendingMetalDisplay = true
             DispatchQueue.main.asyncAfter(
-                deadline: DispatchTime (uptimeNanoseconds: DispatchTime.now().uptimeNanoseconds + UInt64 (fpsDelay))) { [weak self] in
+                deadline: DispatchTime (uptimeNanoseconds: DispatchTime.now().uptimeNanoseconds + displayUpdateDelayNanos)) { [weak self] in
                     guard let self else { return }
                     self.pendingMetalDisplay = false
                     self.metalView?.setNeedsDisplay(self.metalView?.bounds ?? .zero)

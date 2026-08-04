@@ -191,6 +191,15 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     var search: SearchService!
     var debug: UIView?
     var pendingDisplay: Bool = false
+
+    /// Upper bound on how often streaming output repaints this view, in frames
+    /// per second. Display updates are coalesced to at most this rate; the
+    /// trailing update always renders the final state, so no output is lost.
+    /// Clamped to at least 1.
+    public var maxFramesPerSecond: Int = 60
+    var displayUpdateDelayNanos: UInt64 {
+        UInt64(1_000_000_000 / max(1, maxFramesPerSecond))
+    }
 #if canImport(MetalKit)
     var metalView: MTKView?
     var metalRenderer: MetalTerminalRenderer?
