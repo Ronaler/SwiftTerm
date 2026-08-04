@@ -674,6 +674,19 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         NSGraphicsContext.current?.cgContext
     }
     
+    /// Marks the whole terminal for redraw on whichever renderer is active.
+    /// With Metal enabled, `needsDisplay = true` alone is a no-op (``draw(_:)``
+    /// returns early); hosts that force a repaint after mutating the buffer or
+    /// unhiding the view should call this instead.
+    public func setNeedsFullRedraw () {
+        needsDisplay = true
+#if canImport(MetalKit)
+        if metalView != nil {
+            requestMetalDisplay ()
+        }
+#endif
+    }
+
     override public func draw (_ dirtyRect: NSRect) {
 #if canImport(MetalKit)
         if metalView != nil {
