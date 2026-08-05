@@ -295,12 +295,13 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
             mtkView.colorPixelFormat = .bgra8Unorm
             let renderer = try MetalTerminalRenderer(view: mtkView, terminalView: self)
             mtkView.delegate = renderer
+            // Insert at the BOTTOM of the subview stack: the MTKView replaces the
+            // view's own (now skipped) draw(), so every sibling added before Metal
+            // was enabled — the scroller, host overlays — must stay above it.
+            addSubview(mtkView, positioned: .below, relativeTo: nil)
             if let caretView = caretView {
-                addSubview(mtkView, positioned: .below, relativeTo: caretView)
                 caretView.disableAnimations()
                 caretView.isHidden = true
-            } else {
-                addSubview(mtkView, positioned: .below, relativeTo: nil)
             }
             metalView = mtkView
             metalRenderer = renderer
