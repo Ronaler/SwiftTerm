@@ -2740,11 +2740,50 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
     private static func candidateBundles() -> [Bundle] {
         var bundles: [Bundle] = []
         #if SWIFT_PACKAGE
-        bundles.append(Bundle.module)
+        // NOT `Bundle.module`: that accessor is FATAL and misses in every
+        // packaged .app. SwiftPM generates it to look in exactly two places —
+        // the ROOT of the .app (`Foo.app/SwiftTerm_SwiftTerm.bundle`, beside
+        // `Contents`, not inside it) and the absolute build directory of the
+        // machine that compiled it — and to call `fatalError` when both miss.
+        // The first can never exist: `codesign` refuses to sign a bundle that
+        // has anything in its root ("unsealed contents present in the bundle
+        // root"). The second exists only on the build machine. So a host that
+        // ships a SwiftPM-built .app and turns the Metal renderer on crashes on
+        // this line for every user but its own developer — a `fatalError`
+        // reached while merely LISTING places to look for a shader.
+        //
+        // Resolving it by hand instead keeps the fallback chain honest: a
+        // missing resource bundle now means "no shaders here, try the next
+        // bundle", which is what the rest of this function already expects.
+        if let module = resourceBundle() {
+            bundles.append(module)
+        }
         #endif
         bundles.append(Bundle(for: MetalTerminalRenderer.self))
         bundles.append(Bundle.main)
         return bundles
     }
+
+    #if SWIFT_PACKAGE
+    /// SwiftTerm's own SwiftPM resource bundle, or `nil` — the non-fatal
+    /// equivalent of `Bundle.module`. Order matters: `resourceURL` is
+    /// `Contents/Resources` of a packaged app (where a host's packer puts it),
+    /// `bundleURL` is the build directory for a bare executable (`swift run`),
+    /// and the last one is the directory holding this module's own bundle
+    /// (`swift test`, where `Bundle.main` is the test runner).
+    private static func resourceBundle() -> Bundle? {
+        let name = "SwiftTerm_SwiftTerm.bundle"
+        let own = Bundle(for: MetalTerminalRenderer.self)
+        let roots = [Bundle.main.resourceURL,
+                     Bundle.main.bundleURL,
+                     own.bundleURL.deletingLastPathComponent()]
+        for root in roots.compactMap({ $0 }) {
+            if let bundle = Bundle(url: root.appendingPathComponent(name)) {
+                return bundle
+            }
+        }
+        return nil
+    }
+    #endif
 }
 #endif
