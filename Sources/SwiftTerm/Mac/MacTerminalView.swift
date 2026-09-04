@@ -575,6 +575,11 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     }
     
     open func bufferActivated(source: Terminal) {
+        // Switching between the normal and the alternate buffer is the one event that
+        // genuinely invalidates a selection: its offsets address the buffer it was made
+        // in, and the other buffer holds entirely different content at those offsets.
+        // Output itself never clears it — see `feedPrepare`.
+        selection.invalidateIfBufferChanged()
         updateScroller ()
     }
     
@@ -606,12 +611,10 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     }
     
     open func linefeed(source: Terminal) {
-        // Preserve a manual text selection across newlines in the normal (scrollback)
-        // buffer so streaming output doesn't wipe it; clear only on the alternate
-        // full-screen buffer. Same fix as `feedPrepare` — see its comment.
-        if source.isCurrentBufferAlternate {
-            selection.selectNone()
-        }
+        // Deliberately empty. Upstream dropped the selection here on every newline;
+        // a newline is output, and output never clears a selection — see
+        // `feedPrepare` for the whole rule and `bufferActivated` for the one event
+        // that does clear it.
     }
     
     /// This vaiable controls whether mouse events are sent to the application running under the

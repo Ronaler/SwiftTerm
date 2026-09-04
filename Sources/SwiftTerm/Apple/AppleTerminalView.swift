@@ -1934,16 +1934,19 @@ extension TerminalView {
     func feedPrepare()
     {
         search.invalidate()
-        // Preserve a manual text selection while output streams into the normal
-        // (scrollback) buffer: selection offsets are absolute buffer coordinates, so
-        // appended output keeps them valid — matching Terminal.app/iTerm2, where a
-        // streaming command never wipes your selection. Gating on `allowMouseReporting`
-        // (a capability flag that defaults to true) cleared it on essentially every
-        // feed. Clear only on the alternate full-screen buffer (vim/htop redrawing in
-        // place), where a stale highlight would point at cells whose content changed.
-        if terminal.isCurrentBufferAlternate {
-            selection.active = false
-        }
+        // Output never drops a manual text selection — in either buffer. A selection
+        // is the user's gesture; only the user takes it away (a click, a keystroke, a
+        // resize) or a change of the buffer it addresses (see `bufferActivated`).
+        // That is what Terminal.app, iTerm2, kitty and Ghostty all do: a full-screen
+        // app repainting under the highlight never erases it.
+        //
+        // Two earlier gates lived here. Upstream cleared on `allowMouseReporting` — a
+        // capability flag that defaults to `true`, so the selection died on every feed
+        // in every terminal. Replacing it with `terminal.isCurrentBufferAlternate`
+        // fixed the local case but left the remote one broken: a terminal talking to a
+        // server sits inside tmux, which holds the outer terminal on the ALTERNATE
+        // screen for the whole session, so an agent's spinner repaint erased the
+        // highlight mid-drag — selecting anything at all was impossible.
         startDisplayUpdates()
     }
     

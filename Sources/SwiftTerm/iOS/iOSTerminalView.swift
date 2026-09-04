@@ -1284,6 +1284,13 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     var lineLeading: CGFloat = 0
     
     open func bufferActivated(source: Terminal) {
+        // The one event that genuinely invalidates a selection: its offsets address
+        // the buffer it was made in. Output never clears it — see `feedPrepare`.
+        let hadSelection = selection.active
+        selection.invalidateIfBufferChanged()
+        if hadSelection && !selection.active {
+            disableSelectionPanGesture()
+        }
         updateScroller ()
     }
     
@@ -1364,11 +1371,8 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     }
     
     open func linefeed(source: Terminal) {
-        // Preserve manual selection while output is streaming when mouse reporting is disabled.
-        if allowMouseReporting {
-            selection.selectNone()
-            disableSelectionPanGesture()
-        }
+        // Deliberately empty, mirroring the Mac view: a newline is output, and output
+        // never clears a selection. The clear moved to `bufferActivated`.
     }
     
     func updateScroller ()

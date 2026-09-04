@@ -49,7 +49,26 @@ class SelectionService: CustomDebugStringConvertible {
     // This avoids the user visible cache
     func setActiveAndNotify () {
         _active = true
+        madeOnAlternateBuffer = terminal.isCurrentBufferAlternate
         terminal.tdel?.selectionChanged (source: terminal)
+    }
+
+    /// Which buffer `start`/`end` were measured against. The two buffers hold
+    /// different content at the same offsets, so a selection only means anything
+    /// while that buffer is the current one.
+    private var madeOnAlternateBuffer: Bool = false
+
+    /// Drops the selection if it was made against the buffer that is no longer
+    /// current. Called when the emulator reports a buffer activation — which
+    /// happens on every DECSET 47/1047/1049 an application sends, including the
+    /// ones that re-assert a mode it is already in, so the comparison (rather
+    /// than an unconditional clear) is what keeps a selection alive inside a
+    /// long-running full-screen app.
+    func invalidateIfBufferChanged () {
+        guard _active, madeOnAlternateBuffer != terminal.isCurrentBufferAlternate else {
+            return
+        }
+        selectNone()
     }
 
     /**
