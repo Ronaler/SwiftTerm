@@ -43,8 +43,23 @@ class CircularList<T> {
         self.maxLength = maxLength
     }
 
-    private func cyclic(_ index: Int) -> Int { (startIndex + index) % array.count }
+    @inline(__always)
+    private func cyclic(_ index: Int) -> Int {
+        let slot = startIndex + index
+        return slot < array.count ? slot : slot % array.count
+    }
 
+    @inline(__always)
+    private func prepareSlot(_ index: Int) -> Int {
+        precondition(index >= 0 && maxLength > 0)
+        // Ordinary parser access is already inside the logical ring. Preserve
+        // cyclic lookahead without paying for a second division on every cell.
+        let logical = index < maxLength ? index : index % maxLength
+        ensureStorage(logical + 1)
+        return cyclic(logical)
+    }
+
+    @inline(__always)
     private func ensureStorage(_ required: Int) {
         guard required > array.count else { return }
         // Keep slack even at the logical limit: a +/-1 row change at full
@@ -66,19 +81,14 @@ class CircularList<T> {
     }
 
     subscript(index: Int) -> T {
-        get {
-            precondition(index >= 0 && maxLength > 0)
-            let index = index % maxLength
-            ensureStorage(index + 1)
-            let slot = cyclic(index)
+        _read {
+            let slot = prepareSlot(index)
             if array[slot] == nil { array[slot] = makeEmpty!(slot) }
-            return array[slot]!
+            yield array[slot]!
         }
         set {
-            precondition(index >= 0 && maxLength > 0)
-            let index = index % maxLength
-            ensureStorage(index + 1)
-            array[cyclic(index)] = newValue
+            let slot = prepareSlot(index)
+            array[slot] = newValue
         }
     }
 
