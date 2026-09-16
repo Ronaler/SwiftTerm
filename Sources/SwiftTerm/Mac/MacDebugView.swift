@@ -103,7 +103,7 @@ public class TerminalDebugView: NSView {
         
         let baseLine = frame.height - height
         let debugBuffer = terminal.buffer
-        for y in 0..<debugBuffer.lines.maxLength {
+        for y in 0..<min(debugBuffer.lines.maxLength, debugBuffer.lines.getArray().count) {
             context.textPosition = CGPoint (x: 0, y: baseLine - (height + CGFloat (y) * height))
             let flag = y == debugBuffer.yDisp ? "D" : " "
             let yb   = y == debugBuffer.yBase ? "B" : " "

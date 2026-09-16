@@ -21,14 +21,18 @@ public final class BufferLine: CustomDebugStringConvertible {
         /// Renders the bottom of a character, using two cells
         case doubledDown
     }
-    var isWrapped: Bool
-    var renderMode: RenderLineMode = .single
+    /// Changes whenever cells or line metadata are mutated. Pair with line identity;
+    /// this wrapping counter is local to the line and uses the terminal's normal
+    /// thread-confinement rules. It may advance for a write of an equal value.
+    public private(set) var contentRevision: UInt64 = 0
+    var isWrapped: Bool { didSet { contentRevision &+= 1 } }
+    var renderMode: RenderLineMode = .single { didSet { contentRevision &+= 1 } }
     private var data: UnsafeMutableBufferPointer<CharData>
     private var dataSize: Int
 
     private var fillCharacter: CharData //used to initialise data
 
-    var images: [TerminalImage]?
+    var images: [TerminalImage]? { didSet { contentRevision &+= 1 } }
 
     public init (cols: Int, fillData: CharData? = nil, isWrapped: Bool = false)
     {
@@ -89,6 +93,7 @@ public final class BufferLine: CustomDebugStringConvertible {
             return data [index]
         }
         set(value) {
+            contentRevision &+= 1
             if index >= dataSize {
                 // All bugs I was aware of have been handled, but keep this message here to
                 // help future refactorings.
@@ -106,6 +111,7 @@ public final class BufferLine: CustomDebugStringConvertible {
     }
 
     func clear(with attribute: Attribute) {
+        contentRevision &+= 1
         let empty = CharData(attribute: attribute)
         data.update(repeating: empty)
         images = nil
@@ -132,6 +138,7 @@ public final class BufferLine: CustomDebugStringConvertible {
     ///  - fillData: the data that will be filled into the line
     public func insertCells (pos: Int, n: Int, rightMargin: Int, fillData: CharData)
     {
+        contentRevision &+= 1
         let len = rightMargin + 1
         let pos = pos % len
         if n < len - pos {
@@ -151,6 +158,7 @@ public final class BufferLine: CustomDebugStringConvertible {
     /// Removes the cells at the specified position, shifting data leftwards
     public func deleteCells (pos: Int, n: Int, rightMargin: Int, fillData: CharData)
     {
+        contentRevision &+= 1
         let len = rightMargin + 1
         let p = pos % len
         if n < len - p {
@@ -170,6 +178,7 @@ public final class BufferLine: CustomDebugStringConvertible {
     /// Replaces the cells in the start to end range with the specified fill data
     public func replaceCells (start: Int, end: Int, fillData : CharData)
     {
+        contentRevision &+= 1
         let length = dataSize
         var idx = start
         while idx < end && idx < length {
@@ -182,6 +191,7 @@ public final class BufferLine: CustomDebugStringConvertible {
     /// `fillData` values, if it is smaller, the data is trimmed
     public func resize (cols: Int, fillData: CharData)
     {
+        contentRevision &+= 1
         let len = dataSize
         if len == cols {
             return
@@ -236,6 +246,7 @@ public final class BufferLine: CustomDebugStringConvertible {
     /// Fills the entire bufferline with the specified ``CharData``
     public func fill (with: CharData)
     {
+        contentRevision &+= 1
         data.update(repeating: with)
     }
 
@@ -246,6 +257,7 @@ public final class BufferLine: CustomDebugStringConvertible {
     ///  - len: number of columns to fill
     public func fill (with: CharData, atCol: Int, len: Int)
     {
+        contentRevision &+= 1
         for i in 0..<len {
             data [i+atCol] = with
         }
@@ -254,6 +266,7 @@ public final class BufferLine: CustomDebugStringConvertible {
     /// Fills the current BufferLine with the contents of another BufferLine.
     public func copyFrom (line: BufferLine)
     {
+        contentRevision &+= 1
         let srcSize = line.dataSize
         if data.count < srcSize {
             data.deinitialize()
@@ -296,6 +309,7 @@ public final class BufferLine: CustomDebugStringConvertible {
     ///  - len: the number of elements to copy
     public func copyFrom (_ src: BufferLine, srcCol: Int, dstCol: Int, len: Int)
     {
+        contentRevision &+= 1
         if src === self && srcCol > dstCol {
             // Overlapping forward copy: go left-to-right (already safe)
             for i in 0..<len {

@@ -1252,7 +1252,7 @@ public final class Buffer {
     func dumpConsole ()
     {
         let debugBuffer = self
-        for y in 0..<debugBuffer._lines.maxLength {
+        for y in 0..<min(debugBuffer._lines.maxLength, debugBuffer._lines.getArray().count) {
             let flag = y == debugBuffer.yDisp ? "D" : " "
             let yb   = y == debugBuffer.yBase ? "B" : " "
             let istr = String (format: "%03d", y)

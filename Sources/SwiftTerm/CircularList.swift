@@ -1,435 +1,174 @@
-//
-//  CircularList.swift
-//  SwiftTerm
-//
-//  Created by Miguel de Icaza on 3/25/19.
-//  Copyright © 2019 Miguel de Icaza. All rights reserved.
-//
-
+// Circular storage shared by terminal history and reflow working lists.
 import Foundation
 
-enum ArgumentError : Error {
+enum ArgumentError: Error {
     case invalidArgument(String)
 }
 
 class CircularList<T> {
-    private var array: [T?]
-    private var startIndex: Int
-    var count: Int {
-        get {
-            return _count
-        }
-        set {
-            precondition(newValue <= maxLength)
+    private var array: [T?] = []
+    private var startIndex = 0
+    private var _count = 0
 
-            if newValue > array.count {
-                let start = array.count
-                for _ in start..<newValue {
-                    array.append (nil)
-                }
+    var count: Int {
+        get { _count }
+        set {
+            precondition(newValue >= 0 && newValue <= maxLength)
+            ensureStorage(newValue)
+            if newValue < _count {
+                for i in newValue..<_count { array[cyclic(i)] = nil }
             }
             _count = newValue
         }
     }
 
-    private var _count: Int
+    // Logical limit is independent of allocation. In particular, changing rows
+    // must not allocate or scan the configured scrollback capacity.
     var maxLength: Int {
         didSet {
-            if maxLength != oldValue {
-                let empty : T? = nil
-                var newArray = Array(repeating: empty, count:Int(maxLength))
-                let top = min (maxLength, array.count)
-                for i in 0..<top {
-                    newArray [i] = array [getCyclicIndex(i)]
+            precondition(maxLength >= 0)
+            if maxLength < oldValue {
+                let end = min(oldValue, array.count)
+                if maxLength < end {
+                    for i in maxLength..<end { array[cyclic(i)] = nil }
                 }
-                startIndex = 0
-                array = newArray
-                return
+                _count = min(_count, maxLength)
             }
         }
     }
 
-    ///
-    /// This method is called to fill a slot that might be empty on demand, gets a -1 for a row that
-    /// does not exist, or the index requested otherwise
-    //
-    var makeEmpty: ((_ idx: Int) -> T)? = nil
-
-    public init (maxLength: Int)
-    {
-        array = Array.init(repeating: nil, count: Int(maxLength))
+    var makeEmpty: ((_ idx: Int) -> T)?
+    init(maxLength: Int) {
+        precondition(maxLength >= 0)
         self.maxLength = maxLength
-        self._count = 0
-        self.startIndex = 0
     }
 
-    private func getCyclicIndex(_ index: Int) -> Int {
-        return Int(startIndex + index) % (array.count)
+    private func cyclic(_ index: Int) -> Int { (startIndex + index) % array.count }
+
+    private func ensureStorage(_ required: Int) {
+        guard required > array.count else { return }
+        // Keep slack even at the logical limit: a +/-1 row change at full
+        // history should not repeatedly copy all materialized lines either.
+        let capacity = max(required, max(16, array.count * 2))
+        var replacement = [T?](repeating: nil, count: capacity)
+        for i in 0..<array.count { replacement[i] = array[cyclic(i)] }
+        array = replacement
+        startIndex = 0
     }
 
+    var isEmpty: Bool { count == 0 }
+    var isFull: Bool { count == maxLength }
+    func getArray() -> [T?] { array }
+    func getStartIndex() -> Int { startIndex }
     func debugGetCyclicIndex(_ index: Int) -> Int {
-        getCyclicIndex(index)
+        ensureStorage(index + 1)
+        return cyclic(index)
     }
 
-    subscript (index: Int) -> T {
+    subscript(index: Int) -> T {
         get {
-            let idx = getCyclicIndex(index)
-            if let p = array [idx] {
-                return p
-            } else {
-                // print ("Making empty for \(index) on type \(String (describing: self))")
-                let new = makeEmpty! (idx)
-                array [idx] = new
-                return new
-            }
+            precondition(index >= 0 && maxLength > 0)
+            let index = index % maxLength
+            ensureStorage(index + 1)
+            let slot = cyclic(index)
+            if array[slot] == nil { array[slot] = makeEmpty!(slot) }
+            return array[slot]!
         }
-        set (newValue){
-            array [getCyclicIndex(index)] = newValue
-      }
+        set {
+            precondition(index >= 0 && maxLength > 0)
+            let index = index % maxLength
+            ensureStorage(index + 1)
+            array[cyclic(index)] = newValue
+        }
     }
 
-    func push (_ value: T)
-    {
-        array [getCyclicIndex(count)] = value
-        if count == array.count {
-            startIndex = startIndex + 1
-            if startIndex == array.count {
-                startIndex = 0
-            }
+    func push(_ value: T) { append(value) }
+
+    // Used by specialized recycling without generating an extra pushed event.
+    fileprivate func append(_ value: T) {
+        precondition(maxLength > 0)
+        ensureStorage(min(count + 1, maxLength))
+        if isFull {
+            let tail = cyclic(count)
+            let first = startIndex
+            array[first] = nil
+            array[tail] = value
+            startIndex = (first + 1) % array.count
         } else {
-            count = count + 1
+            array[cyclic(count)] = value
+            _count += 1
         }
     }
 
-    func recycle ()
-    {
-        if count != maxLength {
-            print ("can only recycle when the buffer is full")
-            abort ()
-        }
-        let index = getCyclicIndex(count)
-        startIndex += 1
-        startIndex = startIndex % maxLength
-        array [index] = makeEmpty! (-1)
+    func recycle() {
+        precondition(isFull)
+        append(makeEmpty!(-1))
     }
 
     @discardableResult
-    func pop () -> T {
-        let v = array [getCyclicIndex(count-1)]!
-        count = count - 1
-        return v
+    func pop() -> T {
+        precondition(count > 0)
+        let value = self[count - 1]
+        count -= 1
+        return value
     }
 
-    func splice (start: Int, deleteCount: Int, items: [T], change: (Int) -> Void)
-    {
-        if deleteCount > 0 {
-            var i = start
-            let limit = count-deleteCount
-            while i < limit {
-                array [getCyclicIndex(i)] = array [getCyclicIndex(i+deleteCount)]
-                change(i)
-                i += 1
-            }
-            count = count - deleteCount
-        }
-        // add items
-        var i = count-1
-        let ic = items.count
-        while i >= start {
-#if DEBUG
-            // print("Moving line \(i) to \(i + ic): \(array[getCyclicIndex(i)].debugDescription)")
-#endif
-            array [getCyclicIndex(i + ic)] = array [getCyclicIndex(i)]
-            change(i + ic)
-            i -= 1
-        }
-        for i in 0..<ic {
-            change(start + i)
-            array [getCyclicIndex(start + i)] = items [i]
-        }
-
-        // Adjust length as needed
-        if Int(count) + ic > array.count {
-            let countToTrim = count + items.count - array.count
-            startIndex = startIndex + countToTrim
-            count = array.count
-        } else {
-            count = count + items.count
-        }
-     }
-
-    func trimStart (count: Int)
-    {
-        let c = count > self.count ? self.count : count
-        startIndex = startIndex + c
-        self.count -= count
+    func trimStart(count requested: Int) {
+        let removed = min(max(0, requested), count)
+        guard removed > 0 else { return }
+        for i in 0..<removed { array[cyclic(i)] = nil }
+        startIndex = cyclic(removed)
+        _count -= removed
     }
 
-    func shiftElements (start: Int, count: Int, offset: Int) -> Bool
-    {
-        func dumpState (_ msg: String) -> Bool {
-            print ("Assertion at start=\(start) count=\(count) offset=\(offset): \(msg)")
-            return false
+    func splice(start: Int, deleteCount: Int, items: [T], change: (Int) -> Void) {
+        precondition(start >= 0 && start <= count && deleteCount >= 0 && start + deleteCount <= count)
+        // Splicing already moves the suffix. Snapshot it to avoid overwriting
+        // wrapped sources when insertion also trims the head at the limit.
+        let changedStart = count - deleteCount + items.count > maxLength ? 0 : start
+        let suffix = (start + deleteCount..<count).map { array[cyclic($0)] }
+        count = start
+        for value in items { append(value) }
+        for value in suffix {
+            if let value { append(value) } else {
+                if isFull { trimStart(count: 1) }
+                count += 1
+            }
         }
+        for i in min(changedStart, count)..<count { change(i) }
+    }
 
-        if count < 0 {
-            return dumpState ("count < 0")
-        }
-        if start < 0 {
-            return dumpState ("start < 0")
-        }
-        if start >= self.count {
-            return dumpState ("start >= self.count")
-        }
-        if start+offset <= 0 {
-            return dumpState ("start+offset <= 0")
-        }
-//        precondition (count > 0)
-//        precondition (start >= 0)
-//        precondition (start < self.count)
-//        precondition (start+offset > 0)
-        if offset > 0 {
-            for i in (0..<count).reversed() {
-                self [start + i + offset] = self [start + i]
-            }
-            let expandListBy = start + count + offset - self.count
-            if expandListBy > 0 {
-                self._count += expandListBy
-                while self._count > maxLength {
-                    self._count -= 1
-                    startIndex += 1
-                    // trimmed callback invoke
-                }
-            }
-        } else {
-            for i in 0..<count {
-                self [start + i + offset] = self [start + i]
-            }
+    func shiftElements(start: Int, count length: Int, offset: Int) -> Bool {
+        guard length >= 0, start >= 0, start < count,
+              start + length <= count, start + offset > 0 else { return false }
+        let values = (start..<start + length).map { array[cyclic($0)] }
+        let expanded = max(count, start + length + offset)
+        let trimmed = max(0, expanded - maxLength)
+        trimStart(count: trimmed)
+        count = min(maxLength, expanded)
+        for (i, value) in values.enumerated() {
+            let destination = start + i + offset - trimmed
+            if destination >= 0 && destination < count { array[cyclic(destination)] = value }
         }
         return true
-    }
-
-    var isFull: Bool {
-        get {
-            return count == maxLength
-        }
     }
 }
 
-internal class CircularBufferLineList {
-    private var array: [BufferLine?]
-    private var startIndex: Int
-    var count: Int {
-        get {
-            return _count
-        }
-        set {
-            precondition(newValue <= maxLength)
+internal final class CircularBufferLineList: CircularList<BufferLine> {
+    var onLineRecycled: ((_ hadImages: Bool) -> Void)?
+    var onLinePushed: ((_ hasImages: Bool) -> Void)?
 
-            if newValue > array.count {
-                let start = array.count
-                for _ in start..<newValue {
-                    array.append (nil)
-                }
-            }
-            _count = newValue
-        }
-    }
-
-    public var isEmpty: Bool { count == 0 }
-    public func getArray() -> [BufferLine?] {
-        array
-    }
-
-    public func getStartIndex() -> Int {
-        startIndex
-    }
-
-    private var _count: Int
-    var maxLength: Int {
-        didSet {
-            if maxLength != oldValue {
-                let empty : BufferLine? = nil
-                var newArray = Array(repeating: empty, count:Int(maxLength))
-                let top = min (maxLength, array.count)
-                for i in 0..<top {
-                    newArray [i] = array [getCyclicIndex(i)]
-                }
-                startIndex = 0
-                array = newArray
-                return
-            }
-        }
-    }
-
-    ///
-    /// This method is called to fill a slot that might be empty on demand, gets a -1 for a row that
-    /// does not exist, or the index requested otherwise
-    //
-    var makeEmpty: ((_ idx: Int) -> BufferLine)? = nil
-
-    /// Called when a line is about to be recycled, with true if the line had images
-    var onLineRecycled: ((_ hadImages: Bool) -> Void)? = nil
-
-    /// Called when a line is pushed, with true if the line has images
-    var onLinePushed: ((_ hasImages: Bool) -> Void)? = nil
-
-    public init (maxLength: Int)
-    {
-        array = Array.init(repeating: nil, count: Int(maxLength))
-        self.maxLength = maxLength
-        self._count = 0
-        self.startIndex = 0
-    }
-
-    /// The private version exists to allow the Swift optimizer to avoid calls to
-    /// `swift_beginAccess`
-    private func getCyclicIndex(_ index: Int) -> Int {
-        return Int(startIndex &+ index) % (array.count)
-    }
-
-    /// Public version of the same method
-    func debugGetCyclicIndex(_ index: Int) -> Int {
-        return getCyclicIndex(index)
-    }
-
-    subscript (index: Int) -> BufferLine {
-        _read {
-            let idx = getCyclicIndex(index)
-            if array[idx] == nil {
-                array[idx] = makeEmpty!(idx)
-            }
-            yield array[idx]!
-        }
-        set (newValue){
-            array [getCyclicIndex(index)] = newValue
-      }
-    }
-
-    func push (_ value: BufferLine)
-    {
-        array [getCyclicIndex(count)] = value
-        if count == array.count {
-            startIndex = startIndex + 1
-            if startIndex == array.count {
-                startIndex = 0
-            }
-        } else {
-            count = count + 1
-        }
+    override func push(_ value: BufferLine) {
+        super.push(value)
         onLinePushed?(value.images != nil)
     }
 
-    func recycle (clearAttribute: Attribute)
-    {
-        if count != maxLength {
-            print ("can only recycle when the buffer is full")
-            abort ()
-        }
-        let index = getCyclicIndex(count)
-        startIndex += 1
-        startIndex = startIndex % maxLength
-        let hadImages = array[index]?.images != nil
-        array[index]?.clear(with: clearAttribute)
+    func recycle(clearAttribute: Attribute) {
+        precondition(isFull)
+        let line = self[0]
+        let hadImages = line.images != nil
+        append(line)
+        line.clear(with: clearAttribute)
         onLineRecycled?(hadImages)
-        //array [index] = makeEmpty! (-1)
-    }
-
-    @discardableResult
-    func pop () -> BufferLine {
-        let v = array [getCyclicIndex(count-1)]!
-        count = count - 1
-        return v
-    }
-
-    func splice (start: Int, deleteCount: Int, items: [BufferLine], change: (Int) -> Void)
-    {
-        if deleteCount > 0 {
-            var i = start
-            let limit = count-deleteCount
-            while i < limit {
-                array [getCyclicIndex(i)] = array [getCyclicIndex(i+deleteCount)]
-                change(i)
-                i += 1
-            }
-            count = count - deleteCount
-        }
-        // add items
-        var i = count-1
-        let ic = items.count
-        while i >= start {
-#if DEBUG
-            // print("Moving line \(i) to \(i + ic): \(array[getCyclicIndex(i)].debugDescription)")
-#endif
-            array [getCyclicIndex(i + ic)] = array [getCyclicIndex(i)]
-            change(i + ic)
-            i -= 1
-        }
-        for i in 0..<ic {
-            change(start + i)
-            array [getCyclicIndex(start + i)] = items [i]
-        }
-
-        // Adjust length as needed
-        if Int(count) + ic > array.count {
-            let countToTrim = count + items.count - array.count
-            startIndex = startIndex + countToTrim
-            count = array.count
-        } else {
-            count = count + items.count
-        }
-     }
-
-    func trimStart (count: Int)
-    {
-        let c = count > self.count ? self.count : count
-        startIndex = startIndex + c
-        self.count -= count
-    }
-
-    func shiftElements (start: Int, count: Int, offset: Int) -> Bool
-    {
-        func dumpState (_ msg: String) -> Bool {
-            print ("Assertion at start=\(start) count=\(count) offset=\(offset): \(msg)")
-            return false
-        }
-
-        if count < 0 {
-            return dumpState ("count < 0")
-        }
-        if start < 0 {
-            return dumpState ("start < 0")
-        }
-        if start >= self.count {
-            return dumpState ("start >= self.count")
-        }
-        if start+offset <= 0 {
-            return dumpState ("start+offset <= 0")
-        }
-        if offset > 0 {
-            for i in (0..<count).reversed() {
-                array[getCyclicIndex(start + i + offset)] = array[getCyclicIndex(start + i)]
-            }
-            let expandListBy = start + count + offset - self.count
-            if expandListBy > 0 {
-                self._count += expandListBy
-                while self._count > maxLength {
-                    self._count -= 1
-                    startIndex += 1
-                    // trimmed callback invoke
-                }
-            }
-        } else {
-            for i in 0..<count {
-                array[getCyclicIndex(start + i + offset)] = array[getCyclicIndex(start + i)]
-            }
-        }
-        return true
-    }
-
-    var isFull: Bool {
-        get {
-            return count == maxLength
-        }
     }
 }

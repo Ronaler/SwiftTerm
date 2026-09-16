@@ -87,18 +87,11 @@ public class LocalProcess {
     var io: DispatchIO?
 
     private let usesMainQueue: Bool
-    private let pendingChunkFlushThreshold = 32
-    private let pendingTimeSliceNs: UInt64 = 4_000_000
-    /// Adjacent pending chunks are merged into one delivery up to this many
-    /// bytes: one parser resume + one coalesced display-update per drain pass
-    /// instead of one per read. Bounded so a single delivery can't hog the
-    /// dispatch queue past the time slice for long.
-    private let maxCoalescedBytes = 256 * 1024
-    private var pendingChunks: [[UInt8]] = []
-    private var pendingChunkIndex: Int = 0
-    private var pendingScheduled = false
-    private let pendingLock = NSLock()
-    
+    // These completion flags are confined to dispatchQueue.
+    private var readEnded = false
+    private var observedExit: Int32?
+    private var terminationDelivered = false
+
     #if false //canImport(Subprocess)
     // Swift Subprocess related properties
     private var subprocessTask: Task<Void, Error>?
@@ -122,73 +115,6 @@ public class LocalProcess {
         self.usesMainQueue = self.dispatchQueue === DispatchQueue.main
     }
 
-    private func enqueueReceivedData(_ bytes: [UInt8]) {
-        pendingLock.lock()
-        pendingChunks.append(bytes)
-        let shouldSchedule = !pendingScheduled
-        if shouldSchedule {
-            pendingScheduled = true
-        }
-        pendingLock.unlock()
-        if shouldSchedule {
-            dispatchQueue.async { [weak self] in
-                self?.drainReceivedData()
-            }
-        }
-    }
-
-    private func drainReceivedData() {
-        let start = DispatchTime.now().uptimeNanoseconds
-        while true {
-            var chunk: [UInt8]?
-            pendingLock.lock()
-            if pendingChunkIndex < pendingChunks.count {
-                // Coalesce adjacent queued chunks (in arrival order) into one
-                // delivery, bounded by maxCoalescedBytes. A burst that queued
-                // many reads then costs one parser resume instead of many.
-                var end = pendingChunkIndex + 1
-                var size = pendingChunks[pendingChunkIndex].count
-                while end < pendingChunks.count, size + pendingChunks[end].count <= maxCoalescedBytes {
-                    size += pendingChunks[end].count
-                    end += 1
-                }
-                if end == pendingChunkIndex + 1 {
-                    chunk = pendingChunks[pendingChunkIndex]
-                } else {
-                    var merged = [UInt8]()
-                    merged.reserveCapacity(size)
-                    for i in pendingChunkIndex..<end {
-                        merged.append(contentsOf: pendingChunks[i])
-                    }
-                    chunk = merged
-                }
-                pendingChunkIndex = end
-                if pendingChunkIndex >= pendingChunkFlushThreshold {
-                    pendingChunks.removeFirst(pendingChunkIndex)
-                    pendingChunkIndex = 0
-                }
-            } else {
-                pendingChunks.removeAll(keepingCapacity: true)
-                pendingChunkIndex = 0
-                pendingScheduled = false
-                pendingLock.unlock()
-                return
-            }
-            pendingLock.unlock()
-
-            if let chunk {
-                delegate?.dataReceived(slice: chunk[...])
-            }
-
-            if DispatchTime.now().uptimeNanoseconds - start >= pendingTimeSliceNs {
-                dispatchQueue.async { [weak self] in
-                    self?.drainReceivedData()
-                }
-                return
-            }
-        }
-    }
-    
     /**
      * Sends the array slice to the local process using DispatchIO
      * - Parameter data: The range of bytes to send to the child process
@@ -258,52 +184,66 @@ public class LocalProcess {
 
     /* Total number of bytes read */
     var totalRead = 0
-    func childProcessRead (done: Bool, data: DispatchData?, errno: Int32) {
-        guard let data else {
-            // Re-schedule the read on transient errors to keep the chain alive
-            if !done, running {
-                io?.read(offset: 0, length: readSize, queue: readQueue, ioHandler: childProcessRead)
+    private func beginRead() {
+        guard let io else { return }
+        var reachedEOF = false
+        var readBytes = 0
+        let gate = ProcessReadGate { [weak self] in
+            guard let self else { return }
+            if reachedEOF {
+                self.dispatchQueue.async { [weak self] in
+                    guard let self else { return }
+                    self.readEnded = true
+                    self.childfd = -1
+                    self.childStopped(cancelProcessMonitor: false)
+                    self.deliverTerminationIfReady()
+                }
+            } else {
+                self.beginRead()
             }
-            return
         }
-        if debugIO {
-            totalRead += data.count
-            print ("[READ] count=\(data.count) received from host total=\(totalRead)")
-        }
-        
-        if data.count == 0 {
-            childfd = -1
-            if running {
-                // Keep process monitor alive so the exit event can still deliver
-                // processTerminated to clients when PTY EOF arrives first.
-                childStopped(cancelProcessMonitor: false)
-                // delegate.processTerminated (self, exitCode: nil)
-            }
-            return
-        }
-        var b: [UInt8] = Array.init(repeating: 0, count: data.count)
-        b.withUnsafeMutableBufferPointer({ ptr in
-            let _ = data.copyBytes(to: ptr)
-            if let dir = loggingDir {
-                let path = dir + "/log-\(logFileCounter)"
-                do {
-                    let dataCopy = Data (ptr)
-                    try dataCopy.write(to: URL.init(fileURLWithPath: path))
-                    logFileCounter += 1
-                } catch {
-                    // Ignore write error
-                    print ("Got error while logging data dump to \(path): \(error)")
+        io.read(offset: 0, length: readSize, queue: readQueue) { [weak self] done, data, error in
+            guard let self else { return }
+            let bytes = data.map { Array($0) } ?? []
+            readBytes += bytes.count
+            if !bytes.isEmpty {
+                self.logReceivedBytes(bytes)
+                if self.usesMainQueue {
+                    gate.received()
+                    ProcessDeliveryScheduler.shared.enqueue(stream: ObjectIdentifier(self), bytes: bytes,
+                        deliver: { [weak self] in self?.delegate?.dataReceived(slice: $0) },
+                        consumed: { [weak self] in self?.readQueue.async { gate.consumed() } })
+                } else {
+                    self.dispatchQueue.sync { self.delegate?.dataReceived(slice: bytes[...]) }
                 }
             }
-        })
-        if usesMainQueue {
-            enqueueReceivedData(b)
-        } else {
-            dispatchQueue.sync {
-                self.delegate?.dataReceived(slice: b[...])
+            if done {
+                reachedEOF = readBytes < self.readSize || error != 0
+                gate.finished()
             }
         }
-        io?.read(offset: 0, length: readSize, queue: readQueue, ioHandler: childProcessRead)
+    }
+
+    private func logReceivedBytes(_ bytes: [UInt8]) {
+        if debugIO {
+            totalRead += bytes.count
+            print("[READ] count=\(bytes.count) received from host total=\(totalRead)")
+        }
+        if let dir = loggingDir {
+            do {
+                try Data(bytes).write(to: URL(fileURLWithPath: dir + "/log-\(logFileCounter)"))
+                logFileCounter += 1
+            } catch {
+                print("Got error while logging data dump to \(dir): \(error)")
+            }
+        }
+    }
+
+    private func deliverTerminationIfReady() {
+        guard readEnded, let exitCode = observedExit, !terminationDelivered else { return }
+        terminationDelivered = true
+        delegate?.processTerminated(self, exitCode: exitCode)
+        childStopped()
     }
 
 #if os(macOS)
@@ -321,8 +261,13 @@ public class LocalProcess {
     {
         var n: Int32 = 0
         waitpid (shellPid, &n, WNOHANG)
-        delegate?.processTerminated(self, exitCode: n)
-        childStopped()
+        if usesMainQueue {
+            observedExit = n
+            deliverTerminationIfReady()
+        } else {
+            delegate?.processTerminated(self, exitCode: n)
+            childStopped()
+        }
     }
 
     /// Indicates if the child process is currently running
@@ -391,7 +336,7 @@ public class LocalProcess {
             }
             io.setLimit(lowWater: 1)
             io.setLimit(highWater: readSize)
-            io.read(offset: 0, length: readSize, queue: readQueue, ioHandler: childProcessRead)
+            beginRead()
             
             // Start subprocess with swift-subprocess asynchronously
             Task {
@@ -475,6 +420,9 @@ public class LocalProcess {
                 cm.setEventHandler(handler: { [weak self] in self?.processTerminated () })
             }
 #endif
+            readEnded = false
+            observedExit = nil
+            terminationDelivered = false
             running = true
             self.childfd = childfd
             self.shellPid = shellPid
@@ -490,7 +438,7 @@ public class LocalProcess {
             }
             io.setLimit(lowWater: 1)
             io.setLimit(highWater: readSize)
-            io.read(offset: 0, length: readSize, queue: readQueue, ioHandler: childProcessRead)
+            beginRead()
         }
     }
 

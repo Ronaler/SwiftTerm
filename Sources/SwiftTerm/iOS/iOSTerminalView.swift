@@ -261,6 +261,7 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     // Used for the keyboard long-press gesture that works as a cursor
     var lastFloatingCursorLocation: CGPoint?
     
+    let preparedRows = PreparedRowCache()
     var fontSet: FontSet
     
     /// The font to use to render the terminal, this attempts to derive the bold, italic and italic/bold variants from
@@ -1239,7 +1240,9 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     }
     
     /// Controls weather to use high ansi colors, if false terminal will use bold text instead of high ansi colors
-    public var useBrightColors: Bool = true
+    public var useBrightColors: Bool = true {
+        didSet { resetCaches() }
+    }
 
     /// When true, block element (U+2580-U+259F) and box drawing (U+2500-U+257F) characters use custom rendering.
     public var customBlockGlyphs: Bool = true {

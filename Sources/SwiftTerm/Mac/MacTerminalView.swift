@@ -194,6 +194,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     /// https://gist.github.com/lukaskubanek/9a61ac71dc0db8bb04db2028f2635779
     /// https://developer.apple.com/forums/thread/663256?answerId=646653022#646653022
     public var disableFullRedrawOnAnyChanges = false
+    let preparedRows = PreparedRowCache()
     var fontSet: FontSet
 
     /// The font to use to render the terminal
@@ -457,7 +458,9 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     }
     
     /// Controls weather to use high ansi colors, if false terminal will use bold text instead of high ansi colors
-    public var useBrightColors: Bool = true
+    public var useBrightColors: Bool = true {
+        didSet { resetCaches() }
+    }
 
     /// When true, block element (U+2580-U+259F) and box drawing (U+2500-U+257F) characters use custom rendering.
     public var customBlockGlyphs: Bool = true {

@@ -88,6 +88,7 @@ extension TerminalView {
     
     func resetCaches ()
     {
+        preparedRows.removeAll()
         self.attributes = [:]
         self.urlAttributes = [:]
         self.colors = Array(repeating: nil, count: 256)
@@ -288,6 +289,7 @@ extension TerminalView {
     // Clears the cached state for colors and triggers a full display
     func colorsChanged ()
     {
+        preparedRows.removeAll()
         urlAttributes = [:]
         attributes = [:]
         
@@ -1235,7 +1237,8 @@ extension TerminalView {
             } 
             #endif
             let line = displayBuffer.lines [row]
-            let lineInfo = buildAttributedString(row: row, line: line, cols: displayBuffer.cols)
+            let prepared = preparedRow(row: row, line: line, cols: displayBuffer.cols)
+            let lineInfo = prepared.info
             let rowBase = lineOrigin.y + cellDimension.height
             var underTextImages: [AppleImage] = []
             var overTextKittyImages: [AppleImage] = []
@@ -1267,14 +1270,7 @@ extension TerminalView {
                 overTextKittyImages.sort(by: sortKitty)
             }
 
-            // Pre-create CTLines and runs once per row to avoid duplicate creation
-            let preparedSegments: [(segment: ViewLineSegment, ctLine: CTLine, runs: [CTRun])] =
-                lineInfo.segments.compactMap { segment in
-                    guard segment.attributedString.length > 0 else { return nil }
-                    let ctLine = CTLineCreateWithAttributedString(segment.attributedString)
-                    guard let runs = CTLineGetGlyphRuns(ctLine) as? [CTRun] else { return nil }
-                    return (segment, ctLine, runs)
-                }
+            let preparedSegments = prepared.segments
 
             // Background fill loop — uses cached CTLines
             context.saveGState()
