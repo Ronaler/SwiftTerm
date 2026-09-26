@@ -77,7 +77,24 @@ final class ScreenTests {
         TerminalTestHarness.assertLineText(terminal.buffer, row: 0, equals: "1ABCD")
     }
 
-    @Test func testUserScrollingAdjustsOnTrim() {
+    // Skipper's scroll-lock patch decides by position, not by `userScrolling`
+    // (never set on macOS): a viewport scrolled up keeps its text when the full
+    // buffer trims, and a viewport at the bottom follows the output.
+    @Test func testScrolledUpViewportKeepsItsTextOnTrim() {
+        let (terminal, _) = TerminalTestHarness.makeTerminal(cols: 5, rows: 2, scrollback: 3)
+        terminal.feed(text: "1\r\n2\r\n3\r\n4\r\n5\r\n6\r\n")
+
+        let yBase = terminal.buffer.yBase
+        #expect(yBase >= 2)
+        terminal.setViewYDisp(yBase - 1)
+        let before = TerminalTestHarness.lineText(buffer: terminal.buffer, row: 0)
+        terminal.feed(text: "7\r\n")
+
+        #expect(terminal.buffer.yDisp == yBase - 2)
+        #expect(TerminalTestHarness.lineText(buffer: terminal.buffer, row: 0) == before)
+    }
+
+    @Test func testViewportAtBottomFollowsOutputOnTrim() {
         let (terminal, _) = TerminalTestHarness.makeTerminal(cols: 5, rows: 2, scrollback: 1)
         terminal.feed(text: "1\r\n2\r\n3\r\n")
 
@@ -86,7 +103,7 @@ final class ScreenTests {
         terminal.setViewYDisp(1)
         terminal.feed(text: "4\r\n")
 
-        #expect(terminal.buffer.yDisp == 0)
+        #expect(terminal.buffer.yDisp == terminal.buffer.yBase)
     }
 
     @Test func testResizeReflowsWithScrollback() {
