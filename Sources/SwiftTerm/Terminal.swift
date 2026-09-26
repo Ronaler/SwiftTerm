@@ -5654,13 +5654,14 @@ open class Terminal {
         case .x10:
             sendResponse(cc.CSI, "M", [UInt8(buttonFlags+32), min (UInt8(255), UInt8(32 + x+1)), min (UInt8(255), UInt8(32+y+1))])
         case .sgr:
-            let bflags : Int = ((buttonFlags & 3) == 3) ? (buttonFlags & ~3) : buttonFlags
-            let m = ((buttonFlags & 3) == 3) ? "m" : "M"
+            let release = Terminal.isSgrRelease(buttonFlags)
+            let bflags : Int = release ? (buttonFlags & ~3) : buttonFlags
+            let m = release ? "m" : "M"
             sendResponse(cc.CSI, "<\(bflags);\(x+1);\(y+1)\(m)")
         case .sgrPixel:
-            let bflags : Int = ((buttonFlags & 3) == 3) ? (buttonFlags & ~3) : buttonFlags
-            let m = ((buttonFlags & 3) == 3) ? "m" : "M"
-            print ("\(pixelX);\(pixelY)")
+            let release = Terminal.isSgrRelease(buttonFlags)
+            let bflags : Int = release ? (buttonFlags & ~3) : buttonFlags
+            let m = release ? "m" : "M"
             sendResponse(cc.CSI, "<\(bflags);\(pixelX);\(pixelY)\(m)")
             
         case .urxvt:
@@ -5674,6 +5675,18 @@ open class Terminal {
         }
     }
     
+    /// Whether Cb `buttonFlags` is a button RELEASE, which SGR spells with a
+    /// final `m`. The low two bits equal 3 both for a release and for "no
+    /// button held" — and the latter is what every any-event (`?1003h`) hover
+    /// carries, as 3 + 32 (motion). Deciding on the low bits alone turned each
+    /// hover into `CSI <32;x;y m`, "left button released", and a TUI (Claude
+    /// Code, grok, opencode) clicked whatever the pointer was over. Motion (32)
+    /// and wheel (64) reports are never releases. Same rule as upstream #520.
+    static func isSgrRelease (_ buttonFlags: Int) -> Bool
+    {
+        (buttonFlags & 3) == 3 && (buttonFlags & (32 | 64)) == 0
+    }
+
     /**
      * Sends a mouse motion event for a specific button at the specific location
      * - Parameter buttonFlags: Button flags encoded in Cb mode.

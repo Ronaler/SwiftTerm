@@ -2218,7 +2218,12 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         
         if terminal.mouseMode.sendMotionEvent() {
             let flags = encodeMouseEvent(with: event, overwriteRelease: true)
-            terminal.sendMotion(buttonFlags: flags, x: hit.grid.col, y: hit.grid.row, pixelX: hit.pixels.col, pixelY: hit.pixels.row)
+            // The viewport row, as press/release/drag already report it:
+            // `hit.grid.row` is buffer-absolute, and with scrollback it lands
+            // far below the screen of an app tracking hover (upstream #590).
+            let displayBuffer = terminal.displayBuffer
+            let screenRow = max (0, min (displayBuffer.rows - 1, hit.grid.row - displayBuffer.yDisp))
+            terminal.sendMotion(buttonFlags: flags, x: hit.grid.col, y: screenRow, pixelX: hit.pixels.col, pixelY: hit.pixels.row)
         }
     }
     
