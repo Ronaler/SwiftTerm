@@ -2013,7 +2013,14 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     }
 
     public override func mouseDown(with event: NSEvent) {
-        if allowMouseReporting && terminal.mouseMode.sendButtonPress() && !bypassMouseReporting(event) {
+        let reporting = allowMouseReporting && terminal.mouseMode.sendButtonPress()
+        if reporting && !bypassMouseReporting(event) {
+            // The click is the app's, but a local highlight left by an earlier
+            // Shift+drag is ours and must not outlive it.
+            if selection.active {
+                selection.active = false
+                setNeedsDisplay(bounds)
+            }
             sharedMouseEvent(with: event)
             return
         }
@@ -2023,7 +2030,10 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         switch event.clickCount {
         case 1:
             if selection.active == true {
-                if event.modifierFlags.contains(.shift) {
+                // Under mouse reporting Shift is the escape hatch to the local
+                // terminal, not "extend": a Shift+click clears, and a
+                // Shift+drag starts a fresh selection.
+                if event.modifierFlags.contains(.shift) && !reporting {
                     selection.shiftExtend(bufferPosition: Position(col: hit.col, row: hit.row))
                 } else {
                     selection.active = false
